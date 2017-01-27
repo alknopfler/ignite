@@ -51,7 +51,10 @@ public class DataPageIO extends PageIO {
     private static final int SHOW_LINK = 0b0100;
 
     /** */
-    private static final int FREE_LIST_PAGE_ID_OFF = COMMON_HEADER_END;
+    private static final int NEXT_PAGE_ID_OFF = COMMON_HEADER_END;
+
+    /** */
+    private static final int FREE_LIST_PAGE_ID_OFF = NEXT_PAGE_ID_OFF + 8;
 
     /** */
     private static final int FREE_SPACE_OFF = FREE_LIST_PAGE_ID_OFF + 8;
@@ -127,6 +130,22 @@ public class DataPageIO extends PageIO {
 
     /**
      * @param pageAddr Page address.
+     * @param nextPageId Next data page ID.
+     */
+    public void setNextPageId(long pageAddr, long nextPageId) {
+        PageUtils.putLong(pageAddr, NEXT_PAGE_ID_OFF, nextPageId);
+    }
+
+    /**
+     * @param pageAddr Page address.
+     * @return Next data page ID.
+     */
+    public long getNextPageId(long pageAddr) {
+        return PageUtils.getLong(pageAddr, NEXT_PAGE_ID_OFF);
+    }
+
+    /**
+     * @param pageAddr Page address.
      * @param dataOff Data offset.
      * @param show What elements of data page entry to show in the result.
      * @return Data page entry size.
@@ -192,6 +211,14 @@ public class DataPageIO extends PageIO {
         assert freeSpace == actualFreeSpace(pageAddr, pageSize) : freeSpace + " != " + actualFreeSpace(pageAddr, pageSize);
 
         PageUtils.putShort(pageAddr, FREE_SPACE_OFF, (short)freeSpace);
+    }
+
+    public int getFreeSpace2(long pageAddr) {
+        int directCnt = getDirectCount(pageAddr);
+        int indirectCnt = getIndirectCount(pageAddr);
+        int firstEntryOff = getFirstEntryOffset(pageAddr);
+
+        return firstEntryOff - (ITEMS_OFF + ITEM_SIZE * (directCnt + indirectCnt));
     }
 
     /**
@@ -469,6 +496,15 @@ public class DataPageIO extends PageIO {
         return new DataPagePayload(dataOff + PAYLOAD_LEN_SIZE + (fragmented ? LINK_SIZE : 0),
             payloadSize,
             nextLink);
+    }
+
+    public int compact(long pageAddr, int freeSpace, int pageSize) {
+        int directCnt = getDirectCount(pageAddr);
+        int indirectCnt = getIndirectCount(pageAddr);
+
+        getDataOffsetForWrite(pageAddr, freeSpace, directCnt, indirectCnt, pageSize);
+
+        return getFreeSpace(pageAddr);
     }
 
     /**

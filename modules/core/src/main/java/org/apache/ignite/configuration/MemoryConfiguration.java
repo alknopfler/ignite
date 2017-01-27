@@ -29,7 +29,7 @@ public class MemoryConfiguration implements Serializable {
     private static final long serialVersionUID = 0L;
 
     /** Default cache size is 1Gb. */
-    public static final long DFLT_PAGE_CACHE_SIZE = 1024 * 1024 * 1024;
+    public static final long DFLT_PAGE_CACHE_SIZE = 4L * 1024 * 1024 * 1024;
 
     /** Default page size. */
     public static final int DFLT_PAGE_SIZE = 2 * 1024;

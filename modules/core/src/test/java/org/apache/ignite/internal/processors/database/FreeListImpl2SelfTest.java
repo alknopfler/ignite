@@ -20,18 +20,27 @@ package org.apache.ignite.internal.processors.database;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
+import java.util.Stack;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.internal.mem.unsafe.UnsafeMemoryProvider;
+import org.apache.ignite.internal.pagemem.Page;
 import org.apache.ignite.internal.pagemem.PageIdAllocator;
 import org.apache.ignite.internal.pagemem.PageMemory;
 import org.apache.ignite.internal.pagemem.PageUtils;
@@ -40,6 +49,7 @@ import org.apache.ignite.internal.processors.cache.CacheObject;
 import org.apache.ignite.internal.processors.cache.CacheObjectContext;
 import org.apache.ignite.internal.processors.cache.KeyCacheObject;
 import org.apache.ignite.internal.processors.cache.database.CacheDataRow;
+import org.apache.ignite.internal.processors.cache.database.freelist.DataPageList;
 import org.apache.ignite.internal.processors.cache.database.freelist.FreeList;
 import org.apache.ignite.internal.processors.cache.database.freelist.FreeListImpl;
 import org.apache.ignite.internal.processors.cache.database.freelist.FreeListImpl2;
@@ -48,12 +58,13 @@ import org.apache.ignite.plugin.extensions.communication.MessageReader;
 import org.apache.ignite.plugin.extensions.communication.MessageWriter;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.apache.ignite.testframework.junits.common.GridCommonAbstractTest;
+import org.eclipse.jetty.util.ConcurrentHashSet;
 import org.jetbrains.annotations.Nullable;
 
 /**
  *
  */
-public class FreeListImplSelfTest extends GridCommonAbstractTest {
+public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
     /** */
     private static final int CPUS = Runtime.getRuntime().availableProcessors();
 
@@ -72,13 +83,16 @@ public class FreeListImplSelfTest extends GridCommonAbstractTest {
 
         pageMem = null;
     }
+
     /**
      * @throws Exception If failed.
      */
     public void testCompact() throws Exception {
-        FreeList fl = createFreeList(1024);
+        pageMem = createPageMemory(1024);
 
-        for (int iter = 0; iter < 10_000; iter++) {
+        FreeListImpl2 fl = new FreeListImpl2(1, "freelist", pageMem, null, null, 0, true);
+
+        for (int iter = 0; iter < 100_000; iter++) {
             System.out.println("Iter: " + iter + ", allocated=" + pageMem.loadedPages());
 
             List<Long> links = new ArrayList<>();
@@ -93,6 +107,185 @@ public class FreeListImplSelfTest extends GridCommonAbstractTest {
 
             for (Long link : links)
                 fl.removeDataRowByLink(link);
+        }
+
+        fl.close();
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testCompact1() throws Exception {
+        pageMem = createPageMemory(1024);
+
+        FreeListImpl2 fl = new FreeListImpl2(1, "freelist", pageMem, null, null, 0, true);
+
+        for (int iter = 0; iter < 1; iter++) {
+            System.out.println("Iter: " + iter + ", allocated=" + pageMem.loadedPages());
+
+            List<Long> links = new ArrayList<>();
+
+            for (int i = 0; i < 100_000; i++) {
+                TestDataRow row = new TestDataRow(64, 64);
+
+                fl.insertDataRow(row);
+
+                links.add(row.link());
+            }
+
+            for (Long link : links)
+                fl.removeDataRowByLink(link);
+
+            fl.locCompact = true;
+
+            TestDataRow row = new TestDataRow(64, 64);
+
+            fl.insertDataRow(row);
+        }
+
+        fl.close();
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testStack() throws Exception {
+        pageMem = createPageMemory(1024);
+
+        DataPageList pl = new DataPageList(pageMem);
+
+        Deque<Long> ids = new LinkedList<>();
+
+        for (int i = 0; i < 20_000; i++) {
+            long id = pageMem.allocatePage(1, 1, PageIdAllocator.FLAG_DATA);
+
+            assert id != 0;
+
+            pl.put(pageMem.page(1, id));
+
+            ids.push(id);
+        }
+
+        for (int i = 0; i < 20_000; i++) {
+            Page page = pl.take(1);
+            Long id = ids.pop();
+
+            assertEquals((Long)page.id(), id);
+        }
+
+        assertNull(pl.take(1));
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testStackConcurrent1() throws Exception {
+        pageMem = createPageMemory(1024);
+
+        final DataPageList pl = new DataPageList(pageMem);
+
+        Set<Long> ids = new HashSet<>();
+
+        for (int i = 0; i < 100_000; i++) {
+            long id = pageMem.allocatePage(1, 1, PageIdAllocator.FLAG_DATA);
+
+            ids.add(id);
+        }
+
+        for (int i = 0; i < 100; i++) {
+            System.out.println("Iter: " + i);
+
+            for (Long id : ids)
+                pl.put(pageMem.page(1, id));
+
+            final int THREADS = 16;
+
+            final CyclicBarrier b = new CyclicBarrier(THREADS);
+
+            final ConcurrentHashSet<Long> taken = new ConcurrentHashSet<>();
+
+            GridTestUtils.runMultiThreaded(new Callable<Void>() {
+                @Override public Void call() throws Exception {
+                    b.await();
+
+                    for (int i = 0; i < 20_000; i++) {
+                        Page page = pl.take(1);
+
+                        if (page != null)
+                            taken.add(page.id());
+                    }
+
+                    Page page;
+
+                    while ((page = pl.take(1)) != null)
+                        taken.add(page.id());
+
+                    return null;
+                }
+            }, THREADS, "take");
+
+            assertEquals(ids.size(), taken.size());
+        }
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testStackConcurrent2() throws Exception {
+        pageMem = createPageMemory(1024);
+
+        final DataPageList pl = new DataPageList(pageMem);
+
+        Set<Long> ids = new HashSet<>();
+
+        for (int i = 0; i < 100_000; i++) {
+            long id = pageMem.allocatePage(1, 1, PageIdAllocator.FLAG_DATA);
+
+            ids.add(id);
+        }
+
+        for (int i = 0; i < 100; i++) {
+            System.out.println("Iter: " + i);
+
+            for (Long id : ids)
+                pl.put(pageMem.page(1, id));
+
+            final int THREADS = 16;
+
+            final CyclicBarrier b = new CyclicBarrier(THREADS);
+
+            final AtomicLong takeCnt = new AtomicLong();
+
+            final AtomicLong putCnt = new AtomicLong(ids.size());
+
+            GridTestUtils.runMultiThreaded(new Callable<Void>() {
+                @Override public Void call() throws Exception {
+                    b.await();
+
+                    for (int i = 0; i < 200_000; i++) {
+                        Page page = pl.take(1);
+
+                        if (page != null) {
+                            takeCnt.incrementAndGet();
+
+                            if (ThreadLocalRandom.current().nextBoolean()) {
+                                pl.put(page);
+
+                                putCnt.incrementAndGet();
+                            }
+                        }
+                    }
+
+                    Page page;
+
+                    while ((page = pl.take(1)) != null)
+                        takeCnt.incrementAndGet();
+
+                    return null;
+                }
+            }, THREADS, "take");
+
+            assertEquals(putCnt.get(), takeCnt.get());
         }
     }
 

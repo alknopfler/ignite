@@ -40,6 +40,8 @@ public interface Page extends AutoCloseable {
      */
     public long getForReadPointer();
 
+    public long pageAddress();
+
     /**
      * Releases reserved page. Released page can be evicted from RAM after flushing modifications to disk.
      */

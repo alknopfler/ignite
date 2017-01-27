@@ -35,6 +35,7 @@ import org.apache.ignite.internal.processors.cache.GridCacheContext;
 import org.apache.ignite.internal.processors.cache.GridCacheSharedManagerAdapter;
 import org.apache.ignite.internal.processors.cache.database.freelist.FreeList;
 import org.apache.ignite.internal.processors.cache.database.freelist.FreeListImpl;
+import org.apache.ignite.internal.processors.cache.database.freelist.FreeListImpl2;
 import org.apache.ignite.internal.processors.cache.database.tree.reuse.ReuseList;
 import org.apache.ignite.internal.processors.cache.distributed.dht.preloader.GridDhtPartitionsExchangeFuture;
 import org.apache.ignite.internal.util.typedef.internal.U;
@@ -49,7 +50,7 @@ public class IgniteCacheDatabaseSharedManager extends GridCacheSharedManagerAdap
     protected PageMemory pageMem;
 
     /** */
-    private FreeListImpl freeList;
+    private FreeListImpl2 freeList;
 
     /** {@inheritDoc} */
     @Override protected void start0() throws IgniteCheckedException {
@@ -79,7 +80,7 @@ public class IgniteCacheDatabaseSharedManager extends GridCacheSharedManagerAdap
      * @throws IgniteCheckedException If failed.
      */
     protected void initDataStructures() throws IgniteCheckedException {
-        freeList = new FreeListImpl(0, cctx.gridName(), pageMem, null, cctx.wal(), 0L, true);
+        freeList = new FreeListImpl2(0, cctx.gridName(), pageMem, null, cctx.wal(), 0L, true);
     }
 
     /**
@@ -109,6 +110,9 @@ public class IgniteCacheDatabaseSharedManager extends GridCacheSharedManagerAdap
 
     /** {@inheritDoc} */
     @Override protected void stop0(boolean cancel) {
+        if (freeList != null)
+            freeList.close();
+
         if (pageMem != null)
             pageMem.stop();
     }
@@ -118,6 +122,13 @@ public class IgniteCacheDatabaseSharedManager extends GridCacheSharedManagerAdap
      */
     public boolean persistenceEnabled() {
         return false;
+    }
+
+    public long pages() {
+        if (pageMem instanceof PageMemoryNoStoreImpl)
+            return ((PageMemoryNoStoreImpl) pageMem).loadedPages();
+
+        return -1;
     }
 
     /**

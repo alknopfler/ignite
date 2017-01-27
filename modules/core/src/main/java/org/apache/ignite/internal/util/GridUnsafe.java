@@ -1187,6 +1187,10 @@ public abstract class GridUnsafe {
         return UNSAFE.compareAndSwapLong(obj, off, exp, upd);
     }
 
+    public static boolean compareAndSwapObject(Object obj, long off, Object exp, Object upd) {
+        return UNSAFE.compareAndSwapObject(obj, off, exp, upd);
+    }
+
     /**
      * Gets byte value with volatile semantic.
      *

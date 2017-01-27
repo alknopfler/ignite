@@ -58,6 +58,11 @@ public class PageNoStoreImpl implements Page {
     }
 
     /** {@inheritDoc} */
+    @Override public long pageAddress() {
+        return pointer();
+    }
+
+    /** {@inheritDoc} */
     @Override public long id() {
         return pageId;
     }
