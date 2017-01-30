@@ -17,10 +17,10 @@
 
 package org.apache.ignite.internal.processors.cache.database.freelist;
 
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import org.apache.ignite.IgniteCheckedException;
+import org.apache.ignite.IgniteLogger;
 import org.apache.ignite.internal.IgniteInterruptedCheckedException;
 import org.apache.ignite.internal.pagemem.Page;
 import org.apache.ignite.internal.pagemem.PageIdAllocator;
@@ -316,16 +316,14 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         compacter.setName("compacter");
         compacter.setDaemon(true);
 
-        //compacter.start();
+        compacter.start();
     }
 
     private void putInBucket(int bucket, Page page) throws IgniteCheckedException {
         AtomicReferenceArray<DataPageList> b = buckets[bucket];
 
-        ThreadLocalRandom rnd = ThreadLocalRandom.current();
-
         while (true) {
-            int idx = rnd.nextInt(STACKS_PER_BUCKET);
+            int idx = randomInt(STACKS_PER_BUCKET);
 
             DataPageList list = b.get(idx);
 
@@ -354,10 +352,8 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
 //        }
 //
 //        return null;
-        ThreadLocalRandom rnd = ThreadLocalRandom.current();
-
         while (true) {
-            int idx = rnd.nextInt(STACKS_PER_BUCKET);
+            int idx = randomInt(STACKS_PER_BUCKET);
 
             DataPageList list = b.get(idx);
 
@@ -407,6 +403,26 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         return pageMem.page(cacheId, pageId);
     }
 
+    public void dumpState(IgniteLogger log) throws IgniteCheckedException {
+        int s = (int)Math.pow(2, shift);
+
+        for (int b = 0; b < BUCKETS; b++) {
+            log.info("Bucket [idx=" + b + ", spaceFrom=" + s * b + ", spaceTo=" + s * (b + 1) + "]");
+
+            AtomicReferenceArray<DataPageList> stacks = buckets[b];
+
+            for (int i = 0; i < stacks.length(); i++) {
+                log.info("    Stripe: " + i);
+
+                DataPageList pageList = stacks.get(i);
+
+                assert pageList != null;
+
+                pageList.dumpState(cacheId, log);
+            }
+        }
+    }
+
     public void compact() throws IgniteCheckedException {
         for (int b = 0; b < BUCKETS; b++)
             compactBucket(b);
@@ -430,6 +446,8 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         }
     }
 
+    public IgniteLogger log;
+
     private void compactStack(DataPageList pageList) throws IgniteCheckedException {
         Page page;
 
@@ -444,7 +462,7 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
 
     private final AtomicBoolean cg = new AtomicBoolean();
 
-    public boolean locCompact;
+    public boolean locCompact = true;
 
     /** {@inheritDoc} */
     @Override public void insertDataRow(CacheDataRow row) throws IgniteCheckedException {
@@ -481,29 +499,35 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
                                 if (take) {
                                     Page page;
 
-                                    while ((page = pageList.take(cacheId)) != null) {
-                                        Boolean found = writePage(pageMem,
-                                            page,
-                                            this,
-                                            compact2,
-                                            null,
-                                            wal,
-                                            null,
-                                            freeSpace,
-                                            null);
+                                    try {
+                                        while ((page = pageList.take(cacheId)) != null) {
+                                            Boolean found = writePage(pageMem,
+                                                page,
+                                                this,
+                                                compact2,
+                                                null,
+                                                wal,
+                                                null,
+                                                freeSpace,
+                                                null);
 
-                                        assert found != null;
+                                            assert found != null;
 
-                                        if (found) {
-                                            foundPage = page;
+                                            if (found) {
+                                                foundPage = page;
 
-                                            break;
+                                                break;
+                                            }
                                         }
                                     }
-
-                                    stacks.set(i, pageList);
+                                    finally {
+                                        stacks.set(i, pageList);
+                                    }
                                 }
                             }
+
+                            if (foundPage != null)
+                                break;
                         }
 
                         if (foundPage != null)

@@ -91,6 +91,7 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
         pageMem = createPageMemory(1024);
 
         FreeListImpl2 fl = new FreeListImpl2(1, "freelist", pageMem, null, null, 0, true);
+        fl.rnd = new Random();
 
         for (int iter = 0; iter < 100_000; iter++) {
             System.out.println("Iter: " + iter + ", allocated=" + pageMem.loadedPages());
@@ -107,6 +108,8 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
 
             for (Long link : links)
                 fl.removeDataRowByLink(link);
+
+            //fl.locCompact = true;
         }
 
         fl.close();
@@ -120,12 +123,15 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
 
         FreeListImpl2 fl = new FreeListImpl2(1, "freelist", pageMem, null, null, 0, true);
 
+        fl.rnd = new Random(1);
+        fl.log = log;
+
         for (int iter = 0; iter < 1; iter++) {
             System.out.println("Iter: " + iter + ", allocated=" + pageMem.loadedPages());
 
             List<Long> links = new ArrayList<>();
 
-            for (int i = 0; i < 100_000; i++) {
+            for (int i = 0; i < 10_000; i++) {
                 TestDataRow row = new TestDataRow(64, 64);
 
                 fl.insertDataRow(row);
@@ -136,11 +142,15 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
             for (Long link : links)
                 fl.removeDataRowByLink(link);
 
+            //fl.dumpState(log);
+
             fl.locCompact = true;
 
-            TestDataRow row = new TestDataRow(64, 64);
+            for (int i = 0; i < 1000; i++) {
+                TestDataRow row = new TestDataRow(64, 64);
 
-            fl.insertDataRow(row);
+                fl.insertDataRow(row);
+            }
         }
 
         fl.close();

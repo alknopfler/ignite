@@ -18,6 +18,7 @@
 package org.apache.ignite.internal.processors.cache.database.freelist;
 
 import org.apache.ignite.IgniteCheckedException;
+import org.apache.ignite.IgniteLogger;
 import org.apache.ignite.internal.pagemem.Page;
 import org.apache.ignite.internal.pagemem.PageMemory;
 import org.apache.ignite.internal.processors.cache.database.tree.io.DataPageIO;
@@ -87,6 +88,28 @@ public class DataPageList {
 
             if (GridUnsafe.compareAndSwapObject(this, headOffset, head, newHead))
                 return page;
+        }
+    }
+
+    public void dumpState(int cacheId, IgniteLogger log) throws IgniteCheckedException {
+        Head head = this.head;
+
+        long pageId = head.pageId;
+
+        if (pageId == 0) {
+            log.info("        Empty");
+
+            return;
+        }
+
+        while (pageId != 0) {
+            Page page = pageMem.page(cacheId, pageId);
+
+            long pageAddr = page.pageAddress();
+
+            log.info("        Page [id=" + pageId + ", free=" + io.getFreeSpace(pageAddr) + ']');
+
+            pageId = io.getNextPageId(pageAddr);
         }
     }
 
