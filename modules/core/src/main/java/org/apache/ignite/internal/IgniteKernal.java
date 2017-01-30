@@ -97,6 +97,7 @@ import org.apache.ignite.internal.managers.eventstorage.GridEventStorageManager;
 import org.apache.ignite.internal.managers.failover.GridFailoverManager;
 import org.apache.ignite.internal.managers.indexing.GridIndexingManager;
 import org.apache.ignite.internal.managers.loadbalancer.GridLoadBalancerManager;
+import org.apache.ignite.internal.pagemem.PageMemory;
 import org.apache.ignite.internal.processors.GridProcessor;
 import org.apache.ignite.internal.processors.affinity.GridAffinityProcessor;
 import org.apache.ignite.internal.processors.cache.GridCacheAdapter;
@@ -880,36 +881,44 @@ public class IgniteKernal implements IgniteEx, IgniteMXBean, Externalizable {
 
             // Start processors before discovery manager, so they will
             // be able to start receiving messages once discovery completes.
-            startProcessor(createComponent(DiscoveryNodeValidationProcessor.class, ctx));
-            startProcessor(new GridClockSyncProcessor(ctx));
-            startProcessor(new GridAffinityProcessor(ctx));
-            startProcessor(createComponent(GridSegmentationProcessor.class, ctx));
-            startProcessor(createComponent(IgniteCacheObjectProcessor.class, ctx));
-            startProcessor(new GridCacheProcessor(ctx));
-            startProcessor(new GridClusterStateProcessor(ctx));
-            startProcessor(new GridQueryProcessor(ctx));
-            startProcessor(new OdbcProcessor(ctx));
-            startProcessor(new GridServiceProcessor(ctx));
-            startProcessor(new GridTaskSessionProcessor(ctx));
-            startProcessor(new GridJobProcessor(ctx));
-            startProcessor(new GridTaskProcessor(ctx));
-            startProcessor((GridProcessor)SCHEDULE.createOptional(ctx));
-            startProcessor(new GridRestProcessor(ctx));
-            startProcessor(new DataStreamProcessor(ctx));
-            startProcessor((GridProcessor)IGFS.create(ctx, F.isEmpty(cfg.getFileSystemConfiguration())));
-            startProcessor(new GridContinuousProcessor(ctx));
-            startProcessor(createHadoopComponent());
-            startProcessor(new DataStructuresProcessor(ctx));
-            startProcessor(createComponent(PlatformProcessor.class, ctx));
+            try {
+                startProcessor(createComponent(DiscoveryNodeValidationProcessor.class, ctx));
+                startProcessor(new GridClockSyncProcessor(ctx));
+                startProcessor(new GridAffinityProcessor(ctx));
+                startProcessor(createComponent(GridSegmentationProcessor.class, ctx));
+                startProcessor(createComponent(IgniteCacheObjectProcessor.class, ctx));
+                startProcessor(new GridCacheProcessor(ctx));
+                startProcessor(new GridClusterStateProcessor(ctx));
+                startProcessor(new GridQueryProcessor(ctx));
+                startProcessor(new OdbcProcessor(ctx));
+                startProcessor(new GridServiceProcessor(ctx));
+                startProcessor(new GridTaskSessionProcessor(ctx));
+                startProcessor(new GridJobProcessor(ctx));
+                startProcessor(new GridTaskProcessor(ctx));
+                startProcessor((GridProcessor)SCHEDULE.createOptional(ctx));
+                startProcessor(new GridRestProcessor(ctx));
+                startProcessor(new DataStreamProcessor(ctx));
+                startProcessor((GridProcessor)IGFS.create(ctx, F.isEmpty(cfg.getFileSystemConfiguration())));
+                startProcessor(new GridContinuousProcessor(ctx));
+                startProcessor(createHadoopComponent());
+                startProcessor(new DataStructuresProcessor(ctx));
+                startProcessor(createComponent(PlatformProcessor.class, ctx));
 
-            // Start plugins.
-            for (PluginProvider provider : ctx.plugins().allProviders()) {
-                ctx.add(new GridPluginComponent(provider));
+                // Start plugins.
+                for (PluginProvider provider : ctx.plugins().allProviders()) {
+                    ctx.add(new GridPluginComponent(provider));
 
-                provider.start(ctx.plugins().pluginContextForProvider(provider));
+                    provider.start(ctx.plugins().pluginContextForProvider(provider));
+                }
+
+                fillNodeAttributes(clusterProc.updateNotifierEnabled());
             }
+            catch (Throwable e) {
+                // Stop discovery spi to close tcp socket.
+                ctx.discovery().stop(true);
 
-            fillNodeAttributes(clusterProc.updateNotifierEnabled());
+                throw e;
+            }
 
             gw.writeLock();
 
@@ -1126,6 +1135,8 @@ public class IgniteKernal implements IgniteEx, IgniteMXBean, Externalizable {
                                 sysPoolQSize = exec.getQueue().size();
                             }
 
+                            PageMemory pageMem = ctx.cache().context().database().pageMemory();
+
                             String id = U.id8(localNode().id());
 
                             String msg = NL +
@@ -1135,6 +1146,7 @@ public class IgniteKernal implements IgniteEx, IgniteMXBean, Externalizable {
                                 "    ^-- H/N/C [hosts=" + hosts + ", nodes=" + nodes + ", CPUs=" + cpus + "]" + NL +
                                 "    ^-- CPU [cur=" + dblFmt.format(cpuLoadPct) + "%, avg=" +
                                 dblFmt.format(avgCpuLoadPct) + "%, GC=" + dblFmt.format(gcPct) + "%]" + NL +
+                                "    ^-- PageMemory [pages=" + pageMem.loadedPages() + "]" + NL +
                                 "    ^-- Heap [used=" + dblFmt.format(heapUsedInMBytes) + "MB, free=" +
                                 dblFmt.format(freeHeapPct) + "%, comm=" + dblFmt.format(heapCommInMBytes) + "MB]" + NL +
                                 "    ^-- Non heap [used=" + dblFmt.format(nonHeapUsedInMBytes) + "MB, free=" +
