@@ -49,6 +49,8 @@ public class DataPageList {
     /** */
     private final DataPageIO io;
 
+    public volatile boolean needCompact;
+
     /**
      * @param pageMem Page memory.
      */
@@ -58,13 +60,18 @@ public class DataPageList {
         io = DataPageIO.VERSIONS.latest();
     }
 
-    public void put(Page page) throws IgniteCheckedException {
+    public void put(Page page, int bucket, int stripe) throws IgniteCheckedException {
+        long pageAddr = page.pageAddress();
+
+        io.setBucket(pageAddr, bucket);
+        io.setStripe(pageAddr, stripe);
+
         while (true) {
             Head head = this.head;
 
             Head newHead = new Head(page.id());
 
-            io.setNextPageId(page.pageAddress(), head.pageId);
+            io.setNextPageId(pageAddr, head.pageId);
 
             if (GridUnsafe.compareAndSwapObject(this, headOffset, head, newHead))
                 break;

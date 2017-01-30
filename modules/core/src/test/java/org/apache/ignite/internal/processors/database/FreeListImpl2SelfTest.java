@@ -90,7 +90,7 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
     public void testCompact() throws Exception {
         pageMem = createPageMemory(1024);
 
-        FreeListImpl2 fl = new FreeListImpl2(1, "freelist", pageMem, null, null, 0, true);
+        FreeListImpl2 fl = new FreeListImpl2(log, 1, "freelist", pageMem, null, null, 0, true);
         fl.rnd = new Random();
 
         for (int iter = 0; iter < 100_000; iter++) {
@@ -121,7 +121,7 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
     public void testCompact1() throws Exception {
         pageMem = createPageMemory(1024);
 
-        FreeListImpl2 fl = new FreeListImpl2(1, "freelist", pageMem, null, null, 0, true);
+        FreeListImpl2 fl = new FreeListImpl2(log, 1, "freelist", pageMem, null, null, 0, true);
 
         fl.rnd = new Random(1);
         fl.log = log;
@@ -171,7 +171,7 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
 
             assert id != 0;
 
-            pl.put(pageMem.page(1, id));
+            pl.put(pageMem.page(1, id), 0, 0);
 
             ids.push(id);
         }
@@ -206,7 +206,7 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
             System.out.println("Iter: " + i);
 
             for (Long id : ids)
-                pl.put(pageMem.page(1, id));
+                pl.put(pageMem.page(1, id), 0, 0);
 
             final int THREADS = 16;
 
@@ -258,7 +258,7 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
             System.out.println("Iter: " + i);
 
             for (Long id : ids)
-                pl.put(pageMem.page(1, id));
+                pl.put(pageMem.page(1, id), 0, 0);
 
             final int THREADS = 16;
 
@@ -279,7 +279,7 @@ public class FreeListImpl2SelfTest extends GridCommonAbstractTest {
                             takeCnt.incrementAndGet();
 
                             if (ThreadLocalRandom.current().nextBoolean()) {
-                                pl.put(page);
+                                pl.put(page, 0, 0);
 
                                 putCnt.incrementAndGet();
                             }

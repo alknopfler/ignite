@@ -54,7 +54,13 @@ public class DataPageIO extends PageIO {
     private static final int NEXT_PAGE_ID_OFF = COMMON_HEADER_END;
 
     /** */
-    private static final int FREE_LIST_PAGE_ID_OFF = NEXT_PAGE_ID_OFF + 8;
+    private static final int BUCKET_OFF = NEXT_PAGE_ID_OFF + 8;
+
+    /** */
+    private static final int STRIPE_OFF = BUCKET_OFF + 4;
+
+    /** */
+    private static final int FREE_LIST_PAGE_ID_OFF = STRIPE_OFF + 4;
 
     /** */
     private static final int FREE_SPACE_OFF = FREE_LIST_PAGE_ID_OFF + 8;
@@ -99,6 +105,8 @@ public class DataPageIO extends PageIO {
 
         setEmptyPage(pageAddr, pageSize);
         setFreeListPageId(pageAddr, 0L);
+        setBucket(pageAddr, -1);
+        setStripe(pageAddr, -1);
     }
 
     /**
@@ -142,6 +150,22 @@ public class DataPageIO extends PageIO {
      */
     public long getNextPageId(long pageAddr) {
         return PageUtils.getLong(pageAddr, NEXT_PAGE_ID_OFF);
+    }
+
+    public void setBucket(long pageAddr, int bucket) {
+        PageUtils.putInt(pageAddr, BUCKET_OFF, bucket);
+    }
+
+    public int getBucket(long pageAddr) {
+        return PageUtils.getInt(pageAddr, BUCKET_OFF);
+    }
+
+    public void setStripe(long pageAddr, int stripe) {
+        PageUtils.putInt(pageAddr, STRIPE_OFF, stripe);
+    }
+
+    public int getStripe(long pageAddr) {
+        return PageUtils.getInt(pageAddr, STRIPE_OFF);
     }
 
     /**
@@ -218,7 +242,7 @@ public class DataPageIO extends PageIO {
         int indirectCnt = getIndirectCount(pageAddr);
         int firstEntryOff = getFirstEntryOffset(pageAddr);
 
-        return firstEntryOff - (ITEMS_OFF + ITEM_SIZE * (directCnt + indirectCnt));
+        return firstEntryOff - (ITEMS_OFF + ITEM_SIZE * (directCnt + indirectCnt)) - (ITEM_SIZE + PAYLOAD_LEN_SIZE + LINK_SIZE);
     }
 
     /**

@@ -17,6 +17,8 @@
 
 package org.apache.ignite.internal.processors.cache.database.freelist;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import org.apache.ignite.IgniteCheckedException;
@@ -37,6 +39,7 @@ import org.apache.ignite.internal.processors.cache.database.tree.reuse.ReuseList
 import org.apache.ignite.internal.processors.cache.database.tree.reuse.ReuseListImpl;
 import org.apache.ignite.internal.processors.cache.database.tree.util.PageHandler;
 import org.apache.ignite.internal.util.typedef.internal.U;
+import org.jsr166.LongAdder8;
 
 import static org.apache.ignite.internal.processors.cache.database.tree.util.PageHandler.writePage;
 
@@ -66,7 +69,9 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
 
     private final PageHandler<CacheDataRow, Boolean> updateRow = new UpdateRow();
 
-    /** */
+    /**
+     *
+     */
     private class UpdateRow extends PageHandler<CacheDataRow, Boolean> {
             @Override public Boolean run(Page page, PageIO iox, long pageAddr, CacheDataRow row, int itemId)
                 throws IgniteCheckedException {
@@ -83,39 +88,11 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
     /** */
     private final PageHandler<Void, Boolean> compact = new Compact();
 
+    /**
+     *
+     */
     private class Compact extends PageHandler<Void, Boolean> {
-            @Override public Boolean run(Page page, PageIO iox, long pageAddr, Void row, int itemId)
-                throws IgniteCheckedException {
-                DataPageIO io = (DataPageIO)iox;
-
-                int freeSpace = io.getFreeSpace(pageAddr);
-
-                int newFreeSpace = io.compact(pageAddr, freeSpace, pageSize());
-
-                assert freeSpace == newFreeSpace;
-
-                if (newFreeSpace > MIN_PAGE_FREE_SPACE) {
-                    int newBucket = bucket(newFreeSpace);
-
-//                    System.out.println("End compact [freeSpace=" + freeSpace +
-//                        ", newSpace=" + newFreeSpace +
-//                        ", b=" + newBucket + ']');
-
-                    putInBucket(newBucket, page);
-                }
-//                else
-//                    System.out.println("End compact, no reuse [freeSpace=" + freeSpace +
-//                        ", newSpace=" + newFreeSpace + ']');
-
-                return Boolean.TRUE;
-            }
-        };
-
-    /** */
-    private final PageHandler<Void, Boolean> compact2 = new Compact2();
-
-    private class Compact2 extends PageHandler<Void, Boolean> {
-        @Override public Boolean run(Page page, PageIO iox, long pageAddr, Void ignore, int reqSpace)
+        @Override public Boolean run(Page page, PageIO iox, long pageAddr, Void row, int itemId)
             throws IgniteCheckedException {
             DataPageIO io = (DataPageIO)iox;
 
@@ -126,47 +103,88 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
             assert freeSpace == newFreeSpace;
 
             if (newFreeSpace > MIN_PAGE_FREE_SPACE) {
-                if (newFreeSpace >= reqSpace)
-                    return Boolean.TRUE;
-
                 int newBucket = bucket(newFreeSpace);
+
+//                    System.out.println("End compact [freeSpace=" + freeSpace +
+//                        ", newSpace=" + newFreeSpace +
+//                        ", b=" + newBucket + ']');
+
+                putInBucket(newBucket, page);
+            }
+//                else
+//                    System.out.println("End compact, no reuse [freeSpace=" + freeSpace +
+//                        ", newSpace=" + newFreeSpace + ']');
+
+            return Boolean.TRUE;
+        }
+    };
+
+    /** */
+    private final PageHandler<Integer, Compact2Res> compact2 = new Compact2();
+
+    /**
+     *
+     */
+    private class Compact2 extends PageHandler<Integer, Compact2Res> {
+        @Override public Compact2Res run(Page page, PageIO iox, long pageAddr, Integer b, int reqSpace)
+            throws IgniteCheckedException {
+            DataPageIO io = (DataPageIO)iox;
+
+            int freeSpace = io.getFreeSpace(pageAddr);
+
+            int newBucket = bucket(freeSpace);
+
+            if (newBucket == b)
+                return Compact2Res.BUCKET_NOT_CHANGED;
+
+            int newFreeSpace = io.compact(pageAddr, freeSpace, pageSize());
+
+            assert freeSpace == newFreeSpace;
+
+            if (newFreeSpace > MIN_PAGE_FREE_SPACE) {
+                if (newFreeSpace >= reqSpace)
+                    return Compact2Res.FOUND;
 
                 putInBucket(newBucket, page);
             }
 
-            return Boolean.FALSE;
+            return Compact2Res.MOVED;
         }
     };
 
     /** */
     private final PageHandler<CacheDataRow, Integer> writeRow = new WriteRow();
 
+    /**
+     *
+     */
     private class WriteRow extends PageHandler<CacheDataRow, Integer> {
-            @Override public Integer run(Page page, PageIO iox, long pageAddr, CacheDataRow row, int written)
-                throws IgniteCheckedException {
-                DataPageIO io = (DataPageIO)iox;
+        @Override public Integer run(Page page, PageIO iox, long pageAddr, CacheDataRow row, int written)
+            throws IgniteCheckedException {
+            DataPageIO io = (DataPageIO)iox;
 
-                int rowSize = getRowSize(row);
-                int oldFreeSpace = io.getFreeSpace(pageAddr);
+            int rowSize = getRowSize(row);
+            int oldFreeSpace = io.getFreeSpace(pageAddr);
 
-                assert oldFreeSpace > 0 : oldFreeSpace;
+            assert oldFreeSpace > 0 : oldFreeSpace;
 
-                // If the full row does not fit into this page write only a fragment.
-                written = (written == 0 && oldFreeSpace >= rowSize) ? addRow(page, pageAddr, io, row, rowSize):
-                    addRowFragment(page, pageAddr, io, row, written, rowSize);
+            // If the full row does not fit into this page write only a fragment.
+            written = (written == 0 && oldFreeSpace >= rowSize) ? addRow(page, pageAddr, io, row, rowSize):
+                addRowFragment(page, pageAddr, io, row, written, rowSize);
 
-                // Reread free space after update.
-                int newFreeSpace = io.getFreeSpace(pageAddr);
+            // Reread free space after update.
+            //int newFreeSpace = io.getFreeSpace(pageAddr);
+            int newFreeSpace = Math.max(io.getFreeSpace(pageAddr), io.getFreeSpace2(pageAddr));
 
-                if (newFreeSpace > MIN_PAGE_FREE_SPACE) {
-                    int bucket = bucket(newFreeSpace);
+            if (newFreeSpace > MIN_PAGE_FREE_SPACE) {
+                int bucket = bucket(newFreeSpace);
 
-                    putInBucket(bucket, page);
-                }
-
-                // Avoid boxing with garbage generation for usual case.
-                return written == rowSize ? COMPLETE : written;
+                putInBucket(bucket, page);
             }
+
+            // Avoid boxing with garbage generation for usual case.
+            return written == rowSize ? COMPLETE : written;
+        }
 
             /**
              * @param page Page.
@@ -218,6 +236,9 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
     /** */
     private final PageHandler<Void, Long> rmvRow = new RemoveRow();
 
+    /**
+     *
+     */
     private class RemoveRow extends PageHandler<Void, Long> {
         @Override public Long run(Page page, PageIO iox, long pageAddr, Void arg, int itemId)
             throws IgniteCheckedException {
@@ -225,13 +246,34 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
 
             int oldFreeSpace = io.getFreeSpace(pageAddr);
 
-            assert oldFreeSpace >= 0: oldFreeSpace;
+            assert oldFreeSpace >= 0 : oldFreeSpace;
 
             long nextLink = io.removeRow(pageAddr, itemId, pageSize());
 
             int newFreeSpace = io.getFreeSpace(pageAddr);
 
-            assert newFreeSpace > oldFreeSpace;
+            //assert newFreeSpace > oldFreeSpace : "n=" + newFreeSpace + ", o=" + oldFreeSpace;
+
+            if (newFreeSpace > MIN_PAGE_FREE_SPACE) {
+                int curBucket = io.getBucket(pageAddr);
+
+                assert curBucket == -1 || (curBucket >= 0 && curBucket < BUCKETS) : curBucket;
+
+                if (curBucket >= 0) {
+                    int newBucket = bucket(newFreeSpace);
+
+                    if ((newBucket != curBucket)) {
+                        int stripe = io.getStripe(pageAddr);
+
+                        assert stripe >= 0 && stripe < STACKS_PER_BUCKET : stripe;
+
+                        DataPageList list = (DataPageList)buckets[curBucket].get(stripe);
+
+                        if (list != null)
+                            list.needCompact = true;
+                    }
+                }
+            }
 
             // For common case boxed 0L will be cached inside of Long, so no garbage will be produced.
             return nextLink;
@@ -248,6 +290,16 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
 
     private final ReuseListImpl reuseList;
 
+    private LongAdder8 scanCnt = new LongAdder8();
+    private LongAdder8 scanCntSuccess = new LongAdder8();
+    private LongAdder8 scanBuckets = new LongAdder8();
+
+    private LongAdder8 syncClearCnt = new LongAdder8();
+    private LongAdder8 syncClearSuccess = new LongAdder8();
+    private LongAdder8 syncClearBuckets = new LongAdder8();
+    private LongAdder8 syncClearLists = new LongAdder8();
+    private LongAdder8 syncClearPages = new LongAdder8();
+
     /**
      * @param cacheId Cache ID.
      * @param name Name (for debug purpose).
@@ -259,6 +311,7 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
      * @throws IgniteCheckedException If failed.
      */
     public FreeListImpl2(
+        final IgniteLogger log,
         int cacheId,
         String name,
         PageMemory pageMem,
@@ -267,6 +320,7 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         long metaPageId,
         boolean initNew) throws IgniteCheckedException {
         super(cacheId, pageMem, wal);
+        this.log = log;
         this.reuseList = new ReuseListImpl(cacheId, name, pageMem, wal, 0, true);
 
         int pageSize = pageMem.pageSize();
@@ -317,6 +371,53 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         compacter.setDaemon(true);
 
         compacter.start();
+
+        Thread dump = new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        {
+                            long scanCnt0 = scanCnt.sumThenReset();
+
+                            if (scanCnt0 > 0) {
+                                long scanCntSuccess0 = scanCntSuccess.sumThenReset();
+                                long scanBuckets0 = scanBuckets.sumThenReset();
+
+                                log.info("Bucket scans [total=" + scanCnt0 +
+                                    ", success=" + scanCntSuccess0 +
+                                    ", success %=" + scanCntSuccess0 / (double)scanCnt0 +
+                                    ", avgBuckets=" + scanBuckets0 / (double)scanCnt0 + ']');
+                            }
+                        }
+
+                        long syncClearCnt0 = syncClearCnt.sumThenReset();
+
+                        if (syncClearCnt0 > 0) {
+                            long syncClearSuccess0 = syncClearSuccess.sumThenReset();
+                            long syncClearBuckets0 = syncClearBuckets.sumThenReset();
+                            long syncClearLists0 = syncClearLists.sumThenReset();
+                            long syncClearPages0 = syncClearPages.sumThenReset();
+
+                            log.info("Sync clear [total=" + syncClearCnt0 +
+                                ", success=" + syncClearSuccess0 +
+                                ", success %=" + syncClearSuccess0 / (double)syncClearCnt0 +
+                                ", avgBuckets=" + syncClearBuckets0 / (double)syncClearCnt0 +
+                                ", avgLists=" + syncClearLists0 / (double)syncClearCnt0 +
+                                ", avgPages=" + syncClearPages0 / (double)syncClearCnt0 +
+                                ']');
+                        }
+
+                        Thread.sleep(5000);
+                    }
+                }
+                catch (Exception e) {
+                    if (!(e instanceof InterruptedException))
+                        e.printStackTrace();
+                }
+            }
+        });
+        dump.setDaemon(true);
+        dump.start();
     }
 
     private void putInBucket(int bucket, Page page) throws IgniteCheckedException {
@@ -330,7 +431,7 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
             if (list != null) {
                 //System.out.println(Thread.currentThread().getName() + " put in bucket [b=" + bucket + ", stripe=" + idx + ']');
 
-                list.put(page);
+                list.put(page, bucket, idx);
 
                 return;
             }
@@ -434,11 +535,13 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         for (int i = 0; i < stacks.length(); i++) {
             DataPageList pageList = stacks.get(i);
 
-            if (pageList != null) {
+            if (pageList != null && pageList.needCompact) {
                 boolean take = stacks.compareAndSet(i, pageList, null);
 
                 if (take) {
                     compactStack(pageList);
+
+                    pageList.needCompact = false;
 
                     stacks.set(i, pageList);
                 }
@@ -471,73 +574,32 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         int written = 0;
 
         do {
-            int freeSpace = Math.min(MIN_SIZE_FOR_DATA_PAGE, rowSize - written);
+            final int freeSpace = Math.min(MIN_SIZE_FOR_DATA_PAGE, rowSize - written);
 
-            int bucket = bucket(freeSpace);
+            final int bucket = bucket(freeSpace);
 
             Page foundPage = null;
 
+            int cntr = 0;
+
             // TODO: properly handle reuse bucket.
             for (int b = bucket; b < BUCKETS; b++) {
+                cntr++;
+
                 foundPage = takeFromBucket(b);
 
                 if (foundPage != null)
                     break;
             }
 
-            if (locCompact && foundPage == null && bucket > 0 && cg.compareAndSet(false, true)) {
-                try {
-                    for (int b = 0; b < bucket; b++) {
-                        AtomicReferenceArray<DataPageList> stacks = buckets[b];
+            scanCnt.increment();
+            scanBuckets.add(cntr);
 
-                        for (int i = 0; i < STACKS_PER_BUCKET; i++) {
-                            DataPageList pageList = stacks.get(i);
+            if (foundPage != null)
+                scanCntSuccess.increment();
 
-                            if (pageList != null) {
-                                boolean take = stacks.compareAndSet(i, pageList, null);
-
-                                if (take) {
-                                    Page page;
-
-                                    try {
-                                        while ((page = pageList.take(cacheId)) != null) {
-                                            Boolean found = writePage(pageMem,
-                                                page,
-                                                this,
-                                                compact2,
-                                                null,
-                                                wal,
-                                                null,
-                                                freeSpace,
-                                                null);
-
-                                            assert found != null;
-
-                                            if (found) {
-                                                foundPage = page;
-
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    finally {
-                                        stacks.set(i, pageList);
-                                    }
-                                }
-                            }
-
-                            if (foundPage != null)
-                                break;
-                        }
-
-                        if (foundPage != null)
-                            break;
-                    }
-                }
-                finally {
-                    cg.set(false);
-                }
-            }
+            if (foundPage == null && bucket > 0)
+                foundPage = syncClear(freeSpace, bucket);
 
             try (Page page = foundPage == null ? allocateDataPage(row.partition()) : foundPage) {
                 // If it is an existing page, we do not need to initialize it.
@@ -549,6 +611,102 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
             }
         }
         while (written != COMPLETE);
+    }
+
+    enum Compact2Res {
+        FOUND,
+        MOVED,
+        BUCKET_NOT_CHANGED
+    }
+
+    private Page syncClear(final int freeSpace, final int bucket) throws IgniteCheckedException {
+        if (locCompact && cg.compareAndSet(false, true)) {
+            int buckets = 0;
+            int lists = 0;
+            int pages = 0;
+
+            boolean res = false;
+
+            try {
+                for (int b = 0; b < bucket; b++) {
+                    buckets++;
+
+                    AtomicReferenceArray<DataPageList> stacks = this.buckets[b];
+
+                    final Integer B = b;
+
+                    for (int i = 0; i < STACKS_PER_BUCKET; i++) {
+                        DataPageList pageList = stacks.get(i);
+
+                        if (pageList != null && pageList.needCompact) {
+                            lists++;
+
+                            boolean take = stacks.compareAndSet(i, pageList, null);
+
+                            if (take) {
+                                Page page;
+
+                                List<Page> mvPages = null;
+
+                                try {
+                                    while ((page = pageList.take(cacheId)) != null) {
+                                        pages++;
+
+                                        Compact2Res found = writePage(pageMem,
+                                            page,
+                                            this,
+                                            compact2,
+                                            null,
+                                            wal,
+                                            B,
+                                            freeSpace,
+                                            null);
+
+                                        assert found != null;
+
+                                        if (found == Compact2Res.FOUND) {
+                                            res = true;
+
+                                            return page;
+                                        }
+                                        else if (found == Compact2Res.BUCKET_NOT_CHANGED) {
+                                            if (mvPages == null)
+                                                mvPages = new ArrayList<>();
+
+                                            mvPages.add(page);
+                                        }
+                                    }
+                                }
+                                finally {
+                                    if (mvPages != null) {
+                                        for (int p = 0; p < mvPages.size(); p++)
+                                            pageList.put(mvPages.get(p), b, i);
+                                    }
+
+                                    if (!res)
+                                        pageList.needCompact = false;
+
+                                    stacks.set(i, pageList);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            finally {
+                if (res)
+                    syncClearSuccess.increment();
+
+                syncClearCnt.increment();
+                syncClearBuckets.add(buckets);
+                syncClearLists.add(lists);
+                syncClearPages.add(pages);
+
+                cg.set(false);
+            }
+        }
+
+        return null;
     }
 
     /** {@inheritDoc} */
