@@ -37,7 +37,6 @@ import org.apache.ignite.internal.processors.cache.database.tree.reuse.ReuseList
 import org.apache.ignite.internal.processors.cache.database.tree.reuse.ReuseListImpl;
 import org.apache.ignite.internal.processors.cache.database.tree.util.PageHandler;
 import org.apache.ignite.internal.util.typedef.internal.U;
-import org.jsr166.LongAdder8;
 
 import static org.apache.ignite.internal.processors.cache.database.tree.util.PageHandler.writePage;
 
@@ -65,9 +64,10 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
     /** */
     private final int MIN_SIZE_FOR_DATA_PAGE;
 
+    private final PageHandler<CacheDataRow, Boolean> updateRow = new UpdateRow();
+
     /** */
-    private final PageHandler<CacheDataRow, Boolean> updateRow =
-        new PageHandler<CacheDataRow, Boolean>() {
+    private class UpdateRow extends PageHandler<CacheDataRow, Boolean> {
             @Override public Boolean run(Page page, PageIO iox, long pageAddr, CacheDataRow row, int itemId)
                 throws IgniteCheckedException {
                 DataPageIO io = (DataPageIO)iox;
@@ -81,8 +81,9 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         };
 
     /** */
-    private final PageHandler<Void, Boolean> compact =
-        new PageHandler<Void, Boolean>() {
+    private final PageHandler<Void, Boolean> compact = new Compact();
+
+    private class Compact extends PageHandler<Void, Boolean> {
             @Override public Boolean run(Page page, PageIO iox, long pageAddr, Void row, int itemId)
                 throws IgniteCheckedException {
                 DataPageIO io = (DataPageIO)iox;
@@ -111,37 +112,36 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         };
 
     /** */
-    private final PageHandler<Void, Boolean> compact2 =
-        new PageHandler<Void, Boolean>() {
-            @Override public Boolean run(Page page, PageIO iox, long pageAddr, Void ignore, int reqSpace)
-                throws IgniteCheckedException {
-                DataPageIO io = (DataPageIO)iox;
+    private final PageHandler<Void, Boolean> compact2 = new Compact2();
 
-                int freeSpace = io.getFreeSpace(pageAddr);
-                int ts1 = io.getFreeSpace2(pageAddr);
+    private class Compact2 extends PageHandler<Void, Boolean> {
+        @Override public Boolean run(Page page, PageIO iox, long pageAddr, Void ignore, int reqSpace)
+            throws IgniteCheckedException {
+            DataPageIO io = (DataPageIO)iox;
 
-                int newFreeSpace = io.compact(pageAddr, freeSpace, pageSize());
+            int freeSpace = io.getFreeSpace(pageAddr);
 
-                int ts2 = io.getFreeSpace2(pageAddr);
+            int newFreeSpace = io.compact(pageAddr, freeSpace, pageSize());
 
-                assert freeSpace == newFreeSpace;
+            assert freeSpace == newFreeSpace;
 
-                if (newFreeSpace > MIN_PAGE_FREE_SPACE) {
-                    if (newFreeSpace > reqSpace)
-                        return Boolean.TRUE;
+            if (newFreeSpace > MIN_PAGE_FREE_SPACE) {
+                if (newFreeSpace >= reqSpace)
+                    return Boolean.TRUE;
 
-                    int newBucket = bucket(newFreeSpace);
+                int newBucket = bucket(newFreeSpace);
 
-                    putInBucket(newBucket, page);
-                }
-
-                return Boolean.FALSE;
+                putInBucket(newBucket, page);
             }
-        };
+
+            return Boolean.FALSE;
+        }
+    };
 
     /** */
-    private final PageHandler<CacheDataRow, Integer> writeRow =
-        new PageHandler<CacheDataRow, Integer>() {
+    private final PageHandler<CacheDataRow, Integer> writeRow = new WriteRow();
+
+    private class WriteRow extends PageHandler<CacheDataRow, Integer> {
             @Override public Integer run(Page page, PageIO iox, long pageAddr, CacheDataRow row, int written)
                 throws IgniteCheckedException {
                 DataPageIO io = (DataPageIO)iox;
@@ -216,7 +216,9 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
         };
 
     /** */
-    private final PageHandler<Void, Long> rmvRow = new PageHandler<Void, Long>() {
+    private final PageHandler<Void, Long> rmvRow = new RemoveRow();
+
+    private class RemoveRow extends PageHandler<Void, Long> {
         @Override public Long run(Page page, PageIO iox, long pageAddr, Void arg, int itemId)
             throws IgniteCheckedException {
             DataPageIO io = (DataPageIO)iox;
@@ -304,11 +306,9 @@ public class FreeListImpl2 extends DataStructure implements FreeList, ReuseList 
                         Thread.sleep(100);
                     }
                 }
-                catch (InterruptedException ignore) {
-                    // No-op.
-                }
                 catch (Exception e) {
-                    e.printStackTrace();
+                    if (!(e instanceof InterruptedException))
+                        e.printStackTrace();
                 }
             }
         });
