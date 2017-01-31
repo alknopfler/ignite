@@ -1225,13 +1225,30 @@ public class DataPageIO extends PageIO {
             if (delta != 0) { // Move right.
                 assert delta > 0: delta;
 
-                moveBytes(pageAddr, off, entrySize, delta, pageSize);
-
                 int itemId = offs[i] & 0xFF;
 
-                off += delta;
+                setItem(pageAddr, itemId, directItemFromOffset(off + delta));
 
-                setItem(pageAddr, itemId, directItemFromOffset(off));
+                for (int j = i - 1; j >= 0; j--) {
+                    int offNext = offs[j] >>> 8;
+                    int nextSize = getPageEntrySize(pageAddr, offNext, SHOW_PAYLOAD_LEN | SHOW_LINK);
+
+                    if (offNext + nextSize == off) {
+                        i--;
+
+                        off = offNext;
+                        entrySize += nextSize;
+
+                        itemId = offs[j] & 0xFF;
+                        setItem(pageAddr, itemId, directItemFromOffset(offNext + delta));
+                    }
+                    else
+                        break;
+                }
+
+                moveBytes(pageAddr, off, entrySize, delta, pageSize);
+
+                off += delta;
             }
 
             prevOff = off;
